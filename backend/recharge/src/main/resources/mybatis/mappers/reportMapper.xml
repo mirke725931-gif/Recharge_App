@@ -1,0 +1,152 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<!DOCTYPE mapper
+        PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
+        "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+
+<mapper namespace="com.recharge.report.dao.ReportDAO">
+
+    <!-- 신고 등록 -->
+    <insert id="insertReport" parameterType="com.recharge.report.vo.ReportVO">
+        INSERT INTO TB_REPORT (
+        REPORT_ID,
+        REPORT_TARGET_TYPE,
+        REPORT_TARGET_ID,
+        USER_ID,
+        REPORT_REASON,
+        REPORT_DATE,
+        REPORT_STATUS,
+        CREATE_DATE,
+        CREATE_ID,
+        UPDATED_DATE,
+        UPDATED_ID,
+        REPORT_TARGET_USER_ID
+        ) VALUES (
+        #{reportId},
+        #{reportTargetType},
+        #{reportTargetId},
+        #{userId},
+        #{reportReason},
+        SYSDATE,
+        'PENDING',
+        SYSDATE,
+        #{createId},
+        SYSDATE,
+        #{updatedId},
+        #{reportTargetUserId}
+        )
+    </insert>
+
+    <!-- 유저가 이미 같은 게시물을 신고했는지 체크 (1회만 신고 가능) -->
+    <select id="isReported" parameterType="map" resultType="int">
+        SELECT COUNT(1)
+        FROM TB_REPORT
+        WHERE REPORT_TARGET_TYPE = #{targetType}
+        AND REPORT_TARGET_ID = #{targetId}
+        AND USER_ID = #{userId}
+    </select>
+
+    <!-- 특정 대상 신고 내역 -->
+    <select id="getReportsByTarget" parameterType="map"
+            resultType="com.recharge.report.vo.ReportVO">
+        SELECT
+        REPORT_ID AS reportId,
+        REPORT_TARGET_TYPE AS reportTargetType,
+        REPORT_TARGET_ID AS reportTargetId,
+        USER_ID AS userId,
+        REPORT_REASON AS reportReason,
+        REPORT_DATE AS reportDate,
+        REPORT_STATUS AS reportStatus,
+        CREATE_DATE AS createDate,
+        CREATE_ID AS createId,
+        UPDATED_DATE AS updatedDate,
+        UPDATED_ID AS updatedId,
+        REPORT_TARGET_USER_ID AS reportTargetUserId
+        FROM TB_REPORT
+        WHERE REPORT_TARGET_TYPE = #{targetType}
+        AND REPORT_TARGET_ID = #{targetId}
+        ORDER BY REPORT_DATE DESC
+    </select>
+
+    <!-- 현재 신고 ID 최댓값 -->
+    <select id="getMaxReportId" resultType="int">
+        SELECT NVL(MAX(REPORT_ID), 0)
+        FROM TB_REPORT
+    </select>
+
+    <!-- 전체 신고 목록 -->
+    <select id="getAllReports" resultType="com.recharge.report.vo.ReportVO">
+        SELECT
+        r.REPORT_ID             AS reportId,
+        r.REPORT_TARGET_TYPE    AS reportTargetType,
+        r.REPORT_TARGET_ID      AS reportTargetId,
+        r.USER_ID               AS userId,
+        r.REPORT_REASON         AS reportReason,
+        r.REPORT_DATE           AS reportDate,
+        r.REPORT_STATUS         AS reportStatus,
+        r.REPORT_TARGET_USER_ID AS reportTargetUserId,
+
+        -- ✅ [핵심] 이동할 페이지의 부모 ID(PK) 계산
+        CASE
+        -- 1. 사용자 추천글 본문 신고 (ID가 곧 게시글 ID)
+        WHEN r.REPORT_TARGET_TYPE = 'moviepost'
+        THEN r.REPORT_TARGET_ID
+
+        -- 2. 사용자 추천글의 '댓글' 신고 (댓글 테이블의 TARGET_ID가 moviePostId)
+        WHEN r.REPORT_TARGET_TYPE = 'movieusercomment'
+        THEN TO_NUMBER(c.TARGET_ID)
+
+        -- 3. 인기 영화의 '댓글' 신고 (댓글 테이블의 TARGET_ID가 movieId)
+        WHEN r.REPORT_TARGET_TYPE = 'moviecomment'
+        THEN TO_NUMBER(c.TARGET_ID)
+
+        -- (기타 뮤직, 보드 등 기존 로직 유지)
+        WHEN r.REPORT_TARGET_TYPE IN ('musicpost', 'boardpost')
+        THEN r.REPORT_TARGET_ID
+        WHEN r.REPORT_TARGET_TYPE IN ('musiccomment', 'boardcomment')
+        THEN TO_NUMBER(c.TARGET_ID)
+
+        ELSE 0
+        END AS postId,
+
+        -- ✅ 신고된 내용 미리보기 (글 제목 또는 댓글 내용)
+        CASE
+        WHEN r.REPORT_TARGET_TYPE = 'moviepost' THEN mp.MOVIE_POST_TITLE
+        WHEN r.REPORT_TARGET_TYPE IN ('movieusercomment', 'moviecomment') THEN c.COMMENT_TEXT
+
+        -- (기타 기존 로직)
+        WHEN r.REPORT_TARGET_TYPE = 'musicpost' THEN mu.MUSIC_POST_TITLE
+        WHEN r.REPORT_TARGET_TYPE = 'boardpost' THEN b.COMMUNITY_TITLE
+        WHEN r.REPORT_TARGET_TYPE IN ('musiccomment', 'boardcomment') THEN c.COMMENT_TEXT
+        ELSE '내용 없음'
+        END AS postTitleOrCommentText
+
+        FROM TB_REPORT r
+
+        -- 1. 사용자 추천글 조인 (moviepost)
+        LEFT JOIN TB_MOVIE_POST mp
+        ON r.REPORT_TARGET_ID = mp.MOVIE_POST_ID
+        AND r.REPORT_TARGET_TYPE = 'moviepost'
+
+        -- 2. 댓글 테이블 조인 (공통)
+        LEFT JOIN TB_COMMENT c
+        ON r.REPORT_TARGET_ID = c.COMMENT_ID
+        AND r.REPORT_TARGET_TYPE IN ('movieusercomment', 'moviecomment', 'musiccomment', 'boardcomment')
+
+        -- (기타 조인 유지)
+        LEFT JOIN TB_MUSIC_POST mu ON r.REPORT_TARGET_ID = mu.MUSIC_POST_ID AND r.REPORT_TARGET_TYPE = 'musicpost'
+        LEFT JOIN TB_COMMUNITY b ON r.REPORT_TARGET_ID = b.COMMUNITY_POST_ID AND r.REPORT_TARGET_TYPE = 'boardpost'
+
+        ORDER BY r.REPORT_DATE DESC
+    </select>
+
+    <!-- 신고 상태 업데이트 -->
+    <update id="updateReportStatus" parameterType="com.recharge.report.vo.ReportVO">
+        UPDATE TB_REPORT
+        SET
+        REPORT_STATUS = #{reportStatus},
+        UPDATED_DATE = SYSDATE,
+        UPDATED_ID = #{updatedId}
+        WHERE REPORT_ID = #{reportId}
+    </update>
+
+</mapper>
