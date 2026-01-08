@@ -1,1 +1,7 @@
 python/.env
+
+# secrets
+backend/recharge/src/main/resources/application-secret.properties
+**/application-secret.properties
+*.env
+.env*
